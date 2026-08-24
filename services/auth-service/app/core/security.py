@@ -7,12 +7,20 @@ from uuid import UUID
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.models.user import User
+from app.repositories.user_repository import UserRepository
 
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 password_hasher = PasswordHasher()
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_jwt_secret() -> str:
@@ -47,6 +55,32 @@ def create_access_token(*, user_id: UUID, email: str) -> str:
 
 def verify_access_token(token: str) -> dict:
     return jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    unauthorized_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired token.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise unauthorized_exception
+
+    try:
+        payload = verify_access_token(credentials.credentials)
+        user_id = UUID(payload["sub"])
+    except (KeyError, ValueError, jwt.InvalidTokenError) as exc:
+        raise unauthorized_exception from exc
+
+    user = UserRepository(db).get_by_id(user_id)
+    if user is None:
+        raise unauthorized_exception
+
+    return user
 
 
 def create_refresh_token() -> str:

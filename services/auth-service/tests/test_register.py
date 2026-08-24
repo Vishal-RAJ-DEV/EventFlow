@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 import jwt
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
@@ -200,5 +201,74 @@ def test_logout_deletes_refresh_token(monkeypatch) -> None:
 
     assert logout_response.status_code == 204
     assert refresh_response.status_code == 401
+
+    app.dependency_overrides.clear()
+
+
+def test_me_returns_current_user(monkeypatch) -> None:
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    client = create_test_client()
+
+    register_response = client.post(
+        "/auth/register",
+        json={
+            "email": "user@example.com",
+            "password": "secure-password",
+            "name": "Test User",
+        },
+    )
+    login_response = client.post(
+        "/auth/login",
+        json={
+            "email": "user@example.com",
+            "password": "secure-password",
+        },
+    )
+    access_token = login_response.json()["access_token"]
+
+    response = client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == register_response.json()
+
+    app.dependency_overrides.clear()
+
+
+def test_me_without_token_returns_unauthorized() -> None:
+    client = create_test_client()
+
+    response = client.get("/auth/me")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired token."
+
+    app.dependency_overrides.clear()
+
+
+def test_me_with_expired_token_returns_unauthorized(monkeypatch) -> None:
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    client = create_test_client()
+    now = datetime.now(timezone.utc)
+    expired_token = jwt.encode(
+        {
+            "sub": "c7196948-37f2-4d87-98cb-680d4f2bba33",
+            "email": "user@example.com",
+            "iat": now - timedelta(minutes=30),
+            "exp": now - timedelta(minutes=15),
+        },
+        "test-secret",
+        algorithm=JWT_ALGORITHM,
+    )
+
+    response = client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {expired_token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired token."
 
     app.dependency_overrides.clear()
