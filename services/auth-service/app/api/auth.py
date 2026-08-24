@@ -1,0 +1,55 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.repositories.user_repository import UserRepository
+from app.schemas.auth import LoginRequest, RegisterUserRequest, TokenResponse
+from app.schemas.user import UserRead
+from app.services.auth_service import (
+    AuthService,
+    EmailAlreadyRegisteredError,
+    InvalidCredentialsError,
+)
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post(
+    "/register",
+    response_model=UserRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def register_user(payload: RegisterUserRequest, db: Session = Depends(get_db)) -> UserRead:
+    auth_service = AuthService(UserRepository(db))
+
+    try:
+        user = auth_service.register_user(
+            email=payload.email,
+            password=payload.password,
+            name=payload.name,
+        )
+    except EmailAlreadyRegisteredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email is already registered.",
+        ) from exc
+
+    return UserRead.model_validate(user)
+
+
+@router.post("/login", response_model=TokenResponse)
+def login_user(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    auth_service = AuthService(UserRepository(db))
+
+    try:
+        access_token = auth_service.login_user(
+            email=payload.email,
+            password=payload.password,
+        )
+    except InvalidCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials.",
+        ) from exc
+
+    return TokenResponse(access_token=access_token)
