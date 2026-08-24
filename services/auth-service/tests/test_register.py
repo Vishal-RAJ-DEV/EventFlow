@@ -93,6 +93,7 @@ def test_login_user_success(monkeypatch) -> None:
     data = response.json()
     assert data["token_type"] == "bearer"
     assert data["access_token"]
+    assert data["refresh_token"]
 
     payload = jwt.decode(
         data["access_token"],
@@ -121,5 +122,83 @@ def test_login_invalid_credentials_returns_generic_unauthorized(monkeypatch) -> 
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid credentials."
+
+    app.dependency_overrides.clear()
+
+
+def test_refresh_rotates_refresh_token(monkeypatch) -> None:
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    client = create_test_client()
+
+    client.post(
+        "/auth/register",
+        json={
+            "email": "user@example.com",
+            "password": "secure-password",
+            "name": "Test User",
+        },
+    )
+    login_response = client.post(
+        "/auth/login",
+        json={
+            "email": "user@example.com",
+            "password": "secure-password",
+            "device_id": "test-device",
+        },
+    )
+    original_refresh_token = login_response.json()["refresh_token"]
+
+    refresh_response = client.post(
+        "/auth/refresh",
+        json={"refresh_token": original_refresh_token},
+    )
+
+    assert refresh_response.status_code == 200
+    data = refresh_response.json()
+    assert data["access_token"]
+    assert data["refresh_token"]
+    assert data["refresh_token"] != original_refresh_token
+
+    old_token_response = client.post(
+        "/auth/refresh",
+        json={"refresh_token": original_refresh_token},
+    )
+    assert old_token_response.status_code == 401
+
+    app.dependency_overrides.clear()
+
+
+def test_logout_deletes_refresh_token(monkeypatch) -> None:
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    client = create_test_client()
+
+    client.post(
+        "/auth/register",
+        json={
+            "email": "user@example.com",
+            "password": "secure-password",
+            "name": "Test User",
+        },
+    )
+    login_response = client.post(
+        "/auth/login",
+        json={
+            "email": "user@example.com",
+            "password": "secure-password",
+        },
+    )
+    refresh_token = login_response.json()["refresh_token"]
+
+    logout_response = client.post(
+        "/auth/logout",
+        json={"refresh_token": refresh_token},
+    )
+    refresh_response = client.post(
+        "/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+
+    assert logout_response.status_code == 204
+    assert refresh_response.status_code == 401
 
     app.dependency_overrides.clear()
